@@ -21,6 +21,10 @@ import {
 import { RouteTracker, type TrackedPosition } from "./lib/navigation-core";
 
 type PlaceResult = { label: string; point: LngLat };
+type InstallPromptEvent = Event & {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
+};
 
 type DirectionsResponse = {
   ok: boolean;
@@ -300,6 +304,8 @@ export default function Home() {
   const [routeHistory, setRouteHistory] = useState<RouteHistoryEntry[]>([]);
   const [avoidedCameraCount, setAvoidedCameraCount] = useState(0);
   const [fallbackRoute, setFallbackRoute] = useState<RouteState | null>(null);
+  const [installPrompt, setInstallPrompt] = useState<InstallPromptEvent | null>(null);
+  const [appInstalled, setAppInstalled] = useState(false);
   const mapHeading = perspective === "heading" && deviceHeading !== null ? deviceHeading : heading;
 
   const routeExposures = useMemo(
@@ -444,6 +450,25 @@ export default function Home() {
       mapRef.current?.off();
       mapRef.current?.remove();
       mapRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const standalone = window.matchMedia("(display-mode: standalone)").matches || Boolean((navigator as Navigator & { standalone?: boolean }).standalone);
+    setAppInstalled(standalone);
+    const capturePrompt = (event: Event) => {
+      event.preventDefault();
+      setInstallPrompt(event as InstallPromptEvent);
+    };
+    const markInstalled = () => {
+      setAppInstalled(true);
+      setInstallPrompt(null);
+    };
+    window.addEventListener("beforeinstallprompt", capturePrompt);
+    window.addEventListener("appinstalled", markInstalled);
+    return () => {
+      window.removeEventListener("beforeinstallprompt", capturePrompt);
+      window.removeEventListener("appinstalled", markInstalled);
     };
   }, []);
 
@@ -1160,6 +1185,24 @@ export default function Home() {
     mapRef.current.flyTo([position[1], position[0]], zoom, { duration: 0.7, easeLinearity: 0.2 });
   }
 
+  async function installApp() {
+    if (appInstalled) {
+      setRouteStatus("FLOCKYOU is already installed.");
+      return;
+    }
+    if (installPrompt) {
+      await installPrompt.prompt();
+      const choice = await installPrompt.userChoice;
+      setInstallPrompt(null);
+      setRouteStatus(choice.outcome === "accepted" ? "Installing FLOCKYOU..." : "Installation dismissed.");
+      return;
+    }
+    const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
+    setRouteStatus(ios
+      ? "Open the Share menu and choose Add to Home Screen."
+      : "Open the browser menu and choose Install app or Add to Home screen.");
+  }
+
   async function loadCamerasForBounds(bounds: [number, number, number, number], merge = false) {
     setCameraLoadState("loading");
     const bbox = bounds.map((coordinate) => coordinate.toFixed(6)).join(",");
@@ -1462,6 +1505,9 @@ export default function Home() {
 
         {panel === "settings" && (
           <div className="panel-body settings">
+            <button type="button" className="install-app" onClick={installApp} disabled={appInstalled}>
+              {appInstalled ? "FLOCKYOU installed" : "Install FLOCKYOU"}
+            </button>
             <label>
               OpenRouteService API key
               <input type="password" autoComplete="off" spellCheck={false} value={orsKey} onChange={(event) => setOrsKey(event.target.value)} placeholder="Paste key for driving directions" />

@@ -1,5 +1,11 @@
-const CACHE_NAME = "flockyou-static-v3";
-const STATIC_ASSETS = ["/icon.svg", "/manifest.webmanifest"];
+const CACHE_NAME = "flockyou-static-v4";
+const STATIC_ASSETS = [
+  "/icon.svg",
+  "/manifest.webmanifest",
+  "/icons/flockyou-192.png",
+  "/icons/flockyou-512.png",
+  "/icons/flockyou-maskable-512.png"
+];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(STATIC_ASSETS)));
