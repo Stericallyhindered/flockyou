@@ -1214,7 +1214,7 @@ export default function Home() {
   }, [mapStatus]);
 
   return (
-    <main className="app-shell">
+    <main className={`app-shell ${panelExpanded ? "panel-open" : "panel-closed"}`}>
       <div ref={mapNode} className="map" aria-label="Interactive navigation map" />
 
       <section className={`topbar ${navigationActive ? "navigation-mode" : ""}`} aria-label="Map search">
@@ -1248,6 +1248,11 @@ export default function Home() {
         <button className={followGps ? "icon-button locate-button active" : "icon-button locate-button"} onClick={locateUser} title="Locate me" aria-label="Locate me and follow GPS">
           <span className="locate-glyph" aria-hidden="true" />
         </button>
+        {!appInstalled && (
+          <button className="icon-button install-toolbar" onClick={installApp} title="Install FLOCKYOU" aria-label="Install FLOCKYOU">
+            <span className="install-glyph" aria-hidden="true" />
+          </button>
+        )}
         {navigationActive && (
           <button className="overlay-toggle" onClick={() => setHudMode((mode) => mode === "hidden" ? "full" : "hidden")}>
             HUD

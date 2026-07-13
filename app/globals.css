@@ -188,6 +188,12 @@ input:focus { border-color: var(--cyan); box-shadow: 0 0 0 1px rgba(56, 213, 238
 .locate-glyph::before, .locate-glyph::after { background: currentColor; content: ""; left: 50%; position: absolute; top: 50%; transform: translate(-50%, -50%); }
 .locate-glyph::before { height: 24px; width: 1px; }
 .locate-glyph::after { height: 1px; width: 24px; }
+.install-toolbar { border-color: rgba(46, 230, 166, 0.55); color: var(--green); }
+.install-glyph { border-bottom: 2px solid currentColor; display: block; height: 20px; position: relative; width: 20px; }
+.install-glyph::before { border-bottom: 6px solid currentColor; border-left: 5px solid transparent; border-right: 5px solid transparent; bottom: 3px; content: ""; left: 5px; position: absolute; }
+.install-glyph::after { background: currentColor; bottom: 8px; content: ""; height: 10px; left: 9px; position: absolute; width: 2px; }
+.install-app { background: rgba(46, 230, 166, 0.12) !important; border-color: var(--green) !important; color: var(--green) !important; font-weight: 800; position: sticky; top: 0; z-index: 2; }
+.install-app:disabled { cursor: default; opacity: 0.65; }
 .overlay-toggle { background: rgba(56, 213, 238, 0.1); border: 1px solid var(--cyan); color: var(--cyan); display: grid; flex: 0 0 46px; font-family: var(--mono); font-size: 10px; font-weight: 800; min-height: 42px; place-items: center; }
 
 .search-result, .search-results {
@@ -408,6 +414,7 @@ select { background: #080c11; border: 1px solid var(--line); border-radius: 3px;
   .search-result, .search-results { max-width: calc(100vw - 16px); top: 127px; }
   .topbar.navigation-mode { background: transparent; border: 0; box-shadow: none; flex-wrap: nowrap; left: auto; padding: 0; right: max(8px, env(safe-area-inset-right)); top: max(8px, env(safe-area-inset-top)); width: auto; }
   .topbar.navigation-mode .brand, .topbar.navigation-mode .map-search, .topbar.navigation-mode .theme-button, .topbar.navigation-mode .directions-button { display: none; }
+  .topbar.navigation-mode .install-toolbar { display: none; }
   .topbar.navigation-mode .perspective-button, .topbar.navigation-mode .icon-button, .topbar.navigation-mode .overlay-toggle { background: rgba(7, 11, 15, 0.92); display: grid; min-height: 38px; }
   .topbar.navigation-mode .perspective-button { max-width: 92px; }
   .navigation-banner, .navigation-banner.compact { gap: 8px; grid-template-columns: 42px minmax(0, 1fr) 68px; left: 8px; max-width: none; padding: 8px 9px; right: 8px; top: max(54px, calc(env(safe-area-inset-top) + 50px)); transform: none; width: auto; }
@@ -428,6 +435,8 @@ select { background: #080c11; border: 1px solid var(--line); border-radius: 3px;
   .panel-body { max-height: calc(58dvh - 92px); }
   .panel.collapsed { border: 1px solid var(--line-hot); border-radius: 4px; bottom: max(8px, env(safe-area-inset-bottom)); left: 8px; max-height: 48px; padding-bottom: 0; width: calc(100% - 16px); }
   .panel.collapsed .tabs, .panel.collapsed .panel-body { display: none; }
+  .leaflet-bottom.leaflet-right { bottom: calc(64px + env(safe-area-inset-bottom)); transition: bottom 180ms ease; }
+  .app-shell.panel-open .leaflet-bottom.leaflet-right { bottom: calc(58dvh + 10px); }
   h1 { font-size: 16px; }
 }
 
@@ -464,4 +473,5 @@ select { background: #080c11; border: 1px solid var(--line); border-radius: 3px;
   .navigation-banner { left: calc(50% + 170px); max-width: min(720px, calc(100vw - 390px)); top: 72px; }
   .navigation-banner .maneuver-symbol { font-size: 38px; }
   .navigation-metrics { display: none; }
+  .leaflet-bottom.leaflet-right, .app-shell.panel-open .leaflet-bottom.leaflet-right { bottom: 0; }
 }
