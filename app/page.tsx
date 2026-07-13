@@ -494,7 +494,8 @@ export default function Home() {
     const readyTimer = window.setTimeout(() => { persistenceReadyRef.current = true; }, 0);
     if ("serviceWorker" in navigator) {
       if (process.env.NODE_ENV === "production") {
-        void navigator.serviceWorker.register("/sw.js");
+        void navigator.serviceWorker.register("/sw.js", { updateViaCache: "none" })
+          .then((registration) => registration.update());
       } else {
         void navigator.serviceWorker.getRegistrations().then((registrations) => {
           registrations.forEach((registration) => void registration.unregister());

@@ -63,7 +63,12 @@ export async function GET(request: NextRequest) {
   const source = request.nextUrl.searchParams.get("url");
   const bounds = parseBounds(request.nextUrl.searchParams.get("bbox"));
   if (!source) return NextResponse.json({ error: "Missing camera URL" }, { status: 400 });
-  if (!bounds) return NextResponse.json({ error: "A valid west,south,east,north bbox is required" }, { status: 400 });
+  if (!bounds) {
+    return NextResponse.json(
+      { type: "FeatureCollection", features: [], total: 0, staleClient: true },
+      { headers: { "Cache-Control": "no-store" } }
+    );
+  }
 
   let url: URL;
   try {

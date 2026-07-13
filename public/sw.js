@@ -1,8 +1,8 @@
-const CACHE_NAME = "flockyou-shell-v2";
-const APP_SHELL = ["/", "/icon.svg", "/manifest.webmanifest"];
+const CACHE_NAME = "flockyou-static-v3";
+const STATIC_ASSETS = ["/icon.svg", "/manifest.webmanifest"];
 
 self.addEventListener("install", (event) => {
-  event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)));
+  event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(STATIC_ASSETS)));
   self.skipWaiting();
 });
 
@@ -17,27 +17,11 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("fetch", (event) => {
   const request = event.request;
   const url = new URL(request.url);
-  if (request.method !== "GET" || url.origin !== self.location.origin || url.pathname.startsWith("/api/")) return;
-
-  if (request.mode === "navigate") {
-    event.respondWith(
-      fetch(request)
-        .then((response) => {
-          const copy = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put("/", copy));
-          return response;
-        })
-        .catch(() => caches.match("/"))
-    );
-    return;
-  }
+  if (request.method !== "GET" || url.origin !== self.location.origin || !STATIC_ASSETS.includes(url.pathname)) return;
 
   event.respondWith(
     caches.match(request).then((cached) => cached ?? fetch(request).then((response) => {
-      if (response.ok) {
-        const copy = response.clone();
-        caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
-      }
+      if (response.ok) void caches.open(CACHE_NAME).then((cache) => cache.put(request, response.clone()));
       return response;
     }))
   );
