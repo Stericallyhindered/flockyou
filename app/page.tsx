@@ -76,31 +76,7 @@ type RouteHistoryEntry = {
   avoidedCameras: number;
 };
 
-const defaultCenter: LngLat = [-119.0187, 35.3733];
-const defaultDeflockUrl = "https://data.dontgetflocked.com/cameras.geojson.gz";
-
-const demoCameras: CameraPoint[] = [
-  {
-    id: "demo-1",
-    name: "ALPR camera sample",
-    position: [-119.024, 35.374],
-    bearing: 90,
-    directionKnown: true,
-    source: "Demo data",
-    verified: "Load DeFlock data for real camera points",
-    confidence: "community"
-  },
-  {
-    id: "demo-2",
-    name: "Roadside camera sample",
-    position: [-119.009, 35.365],
-    bearing: 225,
-    directionKnown: true,
-    source: "Demo data",
-    verified: "Load DeFlock data for real camera points",
-    confidence: "unknown"
-  }
-];
+const defaultCenter: LngLat = [0, 20];
 
 function metersToLabel(meters: number) {
   if (!Number.isFinite(meters)) return "0 ft";
@@ -260,6 +236,8 @@ export default function Home() {
   const cameraConeLayerRef = useRef<Leaflet.LayerGroup | null>(null);
   const tileLayerRef = useRef<Leaflet.TileLayer | null>(null);
   const cameraLoadStartedRef = useRef(false);
+  const cameraViewportTimerRef = useRef<number | null>(null);
+  const lastCameraBoundsRef = useRef("");
   const spokenStepRef = useRef(-1);
   const spokenEventsRef = useRef(new Set<string>());
   const navigationSessionRef = useRef<{ startedAt: number; destination: string } | null>(null);
@@ -272,7 +250,7 @@ export default function Home() {
   const routeTrackerRef = useRef(new RouteTracker());
   const routeLayerRef = useRef<Leaflet.Polyline | null>(null);
   const detourLayerRef = useRef<Leaflet.LayerGroup | null>(null);
-  const camerasRef = useRef<CameraPoint[]>(demoCameras);
+  const camerasRef = useRef<CameraPoint[]>([]);
   const routeRef = useRef<RouteState | null>(null);
   const cameraScopeRef = useRef<"route" | "visible">("visible");
   const lowDataModeRef = useRef(false);
@@ -296,11 +274,10 @@ export default function Home() {
   const [route, setRoute] = useState<RouteState | null>(null);
   const [alternates, setAlternates] = useState<RouteState[]>([]);
   const [routeStatus, setRouteStatus] = useState("Enter a To address, then plan a route.");
-  const [cameras, setCameras] = useState<CameraPoint[]>(demoCameras);
+  const [cameras, setCameras] = useState<CameraPoint[]>([]);
   const [cameraLoadState, setCameraLoadState] = useState<"loading" | "ready" | "error">("loading");
   const [cameraDatasetTotal, setCameraDatasetTotal] = useState(0);
   const [orsKey, setOrsKey] = useState(process.env.NEXT_PUBLIC_OPENROUTESERVICE_API_KEY ?? "");
-  const [deflockUrl, setDeflockUrl] = useState(process.env.NEXT_PUBLIC_DEFLOCK_POINTS_URL ?? defaultDeflockUrl);
   const [panel, setPanel] = useState<"route" | "cameras" | "settings">("route");
   const [panelExpanded, setPanelExpanded] = useState(false);
   const [mapTheme, setMapTheme] = useState<"night" | "day">("day");
@@ -402,11 +379,26 @@ export default function Home() {
     if (!mapNode.current || mapRef.current) return;
 
     let disposed = false;
+    let mapContainer: HTMLElement | null = null;
+    const suspendFollow = () => setFollowGps(false);
     void import("leaflet").then((module) => {
     if (disposed || !mapNode.current) return;
     const L = module.default;
     leafletRef.current = L;
-    const map = L.map(mapNode.current, { zoomControl: false, zoomAnimation: false, fadeAnimation: false, zoomSnap: 0.25 }).setView([defaultCenter[1], defaultCenter[0]], 12);
+    const map = L.map(mapNode.current, {
+      zoomControl: false,
+      zoomAnimation: true,
+      fadeAnimation: true,
+      markerZoomAnimation: true,
+      zoomSnap: 0.25,
+      wheelPxPerZoomLevel: 90,
+      inertia: true,
+      inertiaDeceleration: 2600,
+      easeLinearity: 0.2
+    }).setView([defaultCenter[1], defaultCenter[0]], 2);
+    mapContainer = map.getContainer();
+    mapContainer.addEventListener("pointerdown", suspendFollow, { passive: true });
+    mapContainer.addEventListener("wheel", suspendFollow, { passive: true });
     L.control.zoom({ position: "bottomright" }).addTo(map);
     L.control.scale({ position: "bottomleft", imperial: true, metric: false }).addTo(map);
     map.createPane("cameraPane");
@@ -426,12 +418,19 @@ export default function Home() {
     tileLayerRef.current = tiles;
     cameraLayerRef.current = L.layerGroup().addTo(map);
     cameraConeLayerRef.current = L.layerGroup().addTo(map);
-    map.whenReady(setCameraSourceData);
-    map.on("moveend zoomend", setCameraSourceData);
+    const handleMapSettled = () => {
+      setCameraSourceData();
+      scheduleVisibleCameraLoad();
+    };
+    map.whenReady(handleMapSettled);
+    map.on("moveend zoomend", handleMapSettled);
     mapRef.current = map;
     });
     return () => {
       disposed = true;
+      mapContainer?.removeEventListener("pointerdown", suspendFollow);
+      mapContainer?.removeEventListener("wheel", suspendFollow);
+      if (cameraViewportTimerRef.current !== null) window.clearTimeout(cameraViewportTimerRef.current);
       mapRef.current?.stop();
       mapRef.current?.off();
       mapRef.current?.remove();
@@ -574,7 +573,14 @@ export default function Home() {
               : 17.25;
       const lookAheadMeters = navigationActive ? Math.max(30, Math.min(130, speed * 5)) : 0;
       const center = lookAheadMeters > 0 ? pointAhead(position, heading, lookAheadMeters) : position;
-      map.flyTo([center[1], center[0]], targetZoom, { duration: 0.35 });
+      const target = L.latLng(center[1], center[0]);
+      const centerDistance = map.distance(map.getCenter(), target);
+      const zoomDifference = Math.abs(map.getZoom() - targetZoom);
+      if (zoomDifference > 0.45) {
+        map.flyTo(target, targetZoom, { duration: 0.65, easeLinearity: 0.2 });
+      } else if (centerDistance > (navigationActive ? 3 : 12)) {
+        map.panTo(target, { animate: true, duration: 0.55, easeLinearity: 0.2 });
+      }
     }
   }, [position, trackedPosition, heading, followGps, route, navigationActive, perspective]);
 
@@ -1088,22 +1094,25 @@ export default function Home() {
     });
   }
 
-  async function loadCamerasForBounds(bounds: [number, number, number, number], merge = false) {
-    if (!deflockUrl.trim()) {
-      setCameras(demoCameras);
-      return demoCameras;
-    }
+  function locateUser() {
+    setFollowGps(true);
+    if (perspective === "overview") setPerspective("north");
+    if (!position || !mapRef.current) return;
+    const zoom = navigationActive ? 17.25 : Math.max(15.5, mapRef.current.getZoom());
+    mapRef.current.flyTo([position[1], position[0]], zoom, { duration: 0.7, easeLinearity: 0.2 });
+  }
 
+  async function loadCamerasForBounds(bounds: [number, number, number, number], merge = false) {
     setCameraLoadState("loading");
     const bbox = bounds.map((coordinate) => coordinate.toFixed(6)).join(",");
-    const response = await fetch(`/api/cameras?url=${encodeURIComponent(deflockUrl.trim())}&bbox=${bbox}`);
+    const response = await fetch(`/api/cameras?bbox=${bbox}`);
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.error || `Could not load DeFlock data: ${response.status}`);
     const features = data.type === "FeatureCollection" ? data.features : [];
     const normalized = features
       .map((feature: any, index: number) => normalizeCameraFeature(feature, index))
       .filter(Boolean) as CameraPoint[];
-    const existing = merge ? camerasRef.current.filter((camera) => camera.source !== "Demo data") : [];
+    const existing = merge ? camerasRef.current : [];
     const byId = new Map(existing.map((camera) => [camera.id, camera]));
     normalized.forEach((camera) => byId.set(camera.id, camera));
     const next = [...byId.values()];
@@ -1114,13 +1123,34 @@ export default function Home() {
     return next;
   }
 
-  async function loadDeflockPoints() {
+  function scheduleVisibleCameraLoad() {
+    if (cameraViewportTimerRef.current !== null) window.clearTimeout(cameraViewportTimerRef.current);
+    cameraViewportTimerRef.current = window.setTimeout(() => {
+      const map = mapRef.current;
+      if (!map || map.getZoom() < 6) return;
+      const visible = map.getBounds();
+      const bounds: [number, number, number, number] = [visible.getWest(), visible.getSouth(), visible.getEast(), visible.getNorth()];
+      const signature = bounds.map((coordinate) => coordinate.toFixed(2)).join(",");
+      if (signature === lastCameraBoundsRef.current) return;
+      lastCameraBoundsRef.current = signature;
+      void loadCamerasForBounds(bounds, true).catch((error) => {
+        setCameraLoadState("error");
+        setRouteStatus(error instanceof Error ? error.message : "Camera data failed to load.");
+      });
+    }, 350);
+  }
+
+  async function loadInitialCameras() {
     try {
+      if (!mapRef.current || mapRef.current.getZoom() < 6) {
+        setCameraLoadState("ready");
+        setRouteStatus("Allow GPS or move the map to load nearby cameras.");
+        return;
+      }
       setRouteStatus("Indexing cameras near the current map...");
       const mapBounds = mapRef.current?.getBounds();
-      const bounds: [number, number, number, number] = mapBounds
-        ? [mapBounds.getWest() - 0.08, mapBounds.getSouth() - 0.08, mapBounds.getEast() + 0.08, mapBounds.getNorth() + 0.08]
-        : [defaultCenter[0] - 0.35, defaultCenter[1] - 0.35, defaultCenter[0] + 0.35, defaultCenter[1] + 0.35];
+      if (!mapBounds) return;
+      const bounds: [number, number, number, number] = [mapBounds.getWest(), mapBounds.getSouth(), mapBounds.getEast(), mapBounds.getNorth()];
       const loaded = await loadCamerasForBounds(bounds);
       setRouteStatus(`Camera index ready: ${loaded.length.toLocaleString()} nearby points.`);
     } catch (error) {
@@ -1132,7 +1162,7 @@ export default function Home() {
   useEffect(() => {
     if (!mapRef.current || cameraLoadStartedRef.current) return;
     cameraLoadStartedRef.current = true;
-    void loadDeflockPoints();
+    void loadInitialCameras();
   }, [mapStatus]);
 
   return (
@@ -1159,11 +1189,16 @@ export default function Home() {
         <button className="theme-button" onClick={() => setMapTheme((theme) => theme === "night" ? "day" : "night")}>
           {mapTheme === "night" ? "Day" : "Night"}
         </button>
-        <button className="perspective-button" onClick={cyclePerspective} title="Change map perspective">
-          {perspective === "north" ? "North up" : perspective === "heading" ? "Heading up" : "Overview"}
+        <button
+          className={`perspective-button perspective-${perspective}`}
+          onClick={cyclePerspective}
+          title={perspective === "north" ? "North up" : perspective === "heading" ? "Heading up" : "Route overview"}
+          aria-label={`${perspective === "north" ? "North up" : perspective === "heading" ? "Heading up" : "Route overview"}. Change map perspective.`}
+        >
+          <span className="perspective-glyph" aria-hidden="true" />
         </button>
-        <button className={followGps ? "icon-button active" : "icon-button"} onClick={() => setFollowGps((value) => !value)} aria-label="Toggle GPS follow">
-          GPS
+        <button className={followGps ? "icon-button locate-button active" : "icon-button locate-button"} onClick={locateUser} title="Locate me" aria-label="Locate me and follow GPS">
+          <span className="locate-glyph" aria-hidden="true" />
         </button>
         {navigationActive && (
           <button className="overlay-toggle" onClick={() => setHudMode((mode) => mode === "hidden" ? "full" : "hidden")}>
@@ -1373,11 +1408,6 @@ export default function Home() {
               OpenRouteService API key
               <input type="password" autoComplete="off" spellCheck={false} value={orsKey} onChange={(event) => setOrsKey(event.target.value)} placeholder="Paste key for driving directions" />
             </label>
-            <label>
-              DeFlock GeoJSON points URL
-              <input value={deflockUrl} onChange={(event) => setDeflockUrl(event.target.value)} placeholder={defaultDeflockUrl} />
-            </label>
-            <button onClick={loadDeflockPoints}>Load camera layer</button>
             <span className="form-section-label">Voice guidance</span>
             <div className="mode-row">
               <button type="button" className={voiceMode === "full" ? "active" : ""} onClick={() => setVoiceMode("full")}>Full</button>

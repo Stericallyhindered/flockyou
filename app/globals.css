@@ -161,7 +161,14 @@ input:focus { border-color: var(--cyan); box-shadow: 0 0 0 1px rgba(56, 213, 238
 .map-search button { border-color: var(--line-hot); color: var(--cyan); }
 .directions-button { border-color: rgba(43, 140, 255, 0.7); color: #83bdff; }
 .theme-button { color: #bac6ce; }
-.perspective-button { border-color: rgba(46, 230, 166, 0.5); color: var(--green); white-space: nowrap; }
+.perspective-button { align-items: center; aspect-ratio: 1; border-color: rgba(46, 230, 166, 0.5); color: var(--green); display: grid; flex: 0 0 42px; padding: 0; place-items: center; }
+.perspective-glyph { border: 1px solid currentColor; border-radius: 50%; display: block; height: 22px; position: relative; transition: transform 180ms ease; width: 22px; }
+.perspective-glyph::before { border-bottom: 8px solid currentColor; border-left: 4px solid transparent; border-right: 4px solid transparent; content: ""; left: 6px; position: absolute; top: 2px; }
+.perspective-glyph::after { background: currentColor; content: ""; height: 7px; left: 10px; position: absolute; top: 10px; width: 1px; }
+.perspective-heading .perspective-glyph { transform: rotate(45deg); }
+.perspective-overview .perspective-glyph { border-radius: 2px; }
+.perspective-overview .perspective-glyph::before { border: 1px solid currentColor; bottom: 4px; left: 4px; right: 4px; top: 4px; }
+.perspective-overview .perspective-glyph::after { display: none; }
 .map-search button:hover, .directions-button:hover, .theme-button:hover, .perspective-button:hover { background: #1b2630; border-color: var(--cyan); color: white; }
 
 .icon-button {
@@ -180,6 +187,10 @@ input:focus { border-color: var(--cyan); box-shadow: 0 0 0 1px rgba(56, 213, 238
 }
 
 .icon-button.active { background: rgba(46, 230, 166, 0.12); border-color: var(--green); color: var(--green); box-shadow: inset 0 0 12px rgba(46, 230, 166, 0.08); }
+.locate-glyph { border: 2px solid currentColor; border-radius: 50%; height: 16px; position: relative; width: 16px; }
+.locate-glyph::before, .locate-glyph::after { background: currentColor; content: ""; left: 50%; position: absolute; top: 50%; transform: translate(-50%, -50%); }
+.locate-glyph::before { height: 24px; width: 1px; }
+.locate-glyph::after { height: 1px; width: 24px; }
 .overlay-toggle { background: rgba(56, 213, 238, 0.1); border: 1px solid var(--cyan); color: var(--cyan); display: grid; flex: 0 0 46px; font-family: var(--mono); font-size: 10px; font-weight: 800; min-height: 42px; place-items: center; }
 
 .search-result, .search-results {
@@ -323,7 +334,7 @@ label, .form-section-label {
 .start-navigation { background: rgba(43, 140, 255, 0.14); border: 1px solid var(--blue); color: #7fbcff; min-height: 46px; }
 
 .route-status { border-left: 2px solid var(--amber); color: #aab7bf; font-family: var(--mono); font-size: 11px; line-height: 1.5; margin: -3px 0 0; padding-left: 9px; }
-.status-grid { display: grid; gap: 8px; grid-template-columns: 1fr 1fr; }
+.status-grid { display: grid; gap: 4px; grid-template-columns: 1fr 1fr; }
 .status-grid div, .route-summary, .camera-count {
   background: #0b1016;
   border: 1px solid var(--line);
@@ -336,6 +347,10 @@ label, .form-section-label {
 .status-grid span, .route-summary span, .camera-count span { color: var(--muted); font-family: var(--mono); font-size: 10px; text-transform: uppercase; }
 .status-grid strong, .route-summary strong, .camera-count strong { color: #f1f7f8; font-family: var(--mono); font-size: 15px; }
 .status-grid small { color: #71818d; font-family: var(--mono); font-size: 10px; }
+.status-grid div { gap: 1px 6px; grid-template-columns: auto minmax(0, 1fr); padding: 5px 7px; }
+.status-grid div span { align-self: center; font-size: 8px; grid-row: 1 / 3; }
+.status-grid div strong { font-size: 10px; line-height: 1.2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.status-grid div small { font-size: 8px; line-height: 1.1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .route-summary { border-left: 2px solid var(--blue); grid-template-columns: 1fr 1fr; }
 .route-summary span { grid-column: 1 / -1; }
 

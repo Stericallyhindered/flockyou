@@ -92,13 +92,13 @@ Guidance distances adjust with speed. Every announcement has a stable event key 
 
 ## Camera Layer
 
-The camera layer accepts GeoJSON or gzipped GeoJSON through the server-side `/api/cameras` proxy. The default source is:
+The camera layer uses DeFlock's maintained regional tile index:
 
 ```text
-https://data.dontgetflocked.com/cameras.geojson.gz
+https://cdn.deflock.me/regions/index.json
 ```
 
-The source URL can be changed from the System panel or through `NEXT_PUBLIC_DEFLOCK_POINTS_URL`.
+The server automatically loads only the live tiles intersecting the current viewport or the complete planned route. Camera loading requires no user configuration and never sends the nationwide dataset to the phone.
 
 Camera controls include:
 
@@ -222,7 +222,6 @@ Set the values:
 
 ```dotenv
 NEXT_PUBLIC_OPENROUTESERVICE_API_KEY=your_ors_key
-NEXT_PUBLIC_DEFLOCK_POINTS_URL=https://data.dontgetflocked.com/cameras.geojson.gz
 ```
 
 Create an OpenRouteService account and key at [openrouteservice.org](https://openrouteservice.org/dev/#/signup).
@@ -251,7 +250,6 @@ The navigation test simulates movement along a route and verifies snapped progre
 | Variable | Required | Purpose |
 | --- | --- | --- |
 | `NEXT_PUBLIC_OPENROUTESERVICE_API_KEY` | For routing | Browser-side ORS geocoding and driving-direction requests |
-| `NEXT_PUBLIC_DEFLOCK_POINTS_URL` | No | Overrides the default camera GeoJSON or `.geojson.gz` source |
 
 Because the ORS key is currently a `NEXT_PUBLIC_` variable and directions are requested directly by the browser, the key is visible to users. For a public production deployment, proxy ORS requests through a server endpoint, add rate limiting, and keep the provider credential server-side.
 
@@ -311,7 +309,7 @@ Clearing the site's browser storage removes locally saved history, preferences, 
 
 ## Data Sources and Attribution
 
-- Camera data defaults to [dontgetflocked.com](https://dontgetflocked.com/)
+- Camera data is loaded from DeFlock's live regional tile CDN as implemented by [FoggedLens/deflock](https://github.com/FoggedLens/deflock/blob/master/webapp/src/stores/tiles.ts)
 - The original DeFlock API project is available at [FoggedLens/deflock](https://github.com/FoggedLens/deflock/tree/master/api)
 - Directions and optional geocoding are provided by [OpenRouteService](https://openrouteservice.org/)
 - Map data is provided by [OpenStreetMap contributors](https://www.openstreetmap.org/copyright)
