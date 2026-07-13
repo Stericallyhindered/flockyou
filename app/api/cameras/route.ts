@@ -63,6 +63,56 @@ function tileKeys(bounds: Bounds, tileSize: number, available: Set<string>) {
   return keys;
 }
 
+function routeTileKeys(route: number[][], tileSize: number, available: Set<string>) {
+  const keys = new Set<string>();
+  for (const [lon, lat] of route) {
+    const key = `${Math.floor(lat / tileSize) * tileSize}/${Math.floor(lon / tileSize) * tileSize}`;
+    if (available.has(key)) keys.add(key);
+  }
+  return [...keys];
+}
+
+function routeBounds(route: number[][], paddingDegrees: number): Bounds {
+  const longitudes = route.map(([lon]) => lon);
+  const latitudes = route.map(([, lat]) => lat);
+  return {
+    west: Math.min(...longitudes) - paddingDegrees,
+    south: Math.min(...latitudes) - paddingDegrees,
+    east: Math.max(...longitudes) + paddingDegrees,
+    north: Math.max(...latitudes) + paddingDegrees
+  };
+}
+
+function isNearRoute(record: CameraRecord, route: number[][], corridorMeters: number) {
+  const metersPerLatitude = 110_540;
+  for (let index = 1; index < route.length; index += 1) {
+    const [startLon, startLat] = route[index - 1];
+    const [endLon, endLat] = route[index];
+    const latitude = (record.lat + startLat + endLat) / 3;
+    const metersPerLongitude = 111_320 * Math.cos(latitude * Math.PI / 180);
+    const ax = (startLon - record.lon) * metersPerLongitude;
+    const ay = (startLat - record.lat) * metersPerLatitude;
+    const bx = (endLon - record.lon) * metersPerLongitude;
+    const by = (endLat - record.lat) * metersPerLatitude;
+    const dx = bx - ax;
+    const dy = by - ay;
+    const lengthSquared = dx * dx + dy * dy;
+    const interpolation = lengthSquared === 0 ? 0 : Math.max(0, Math.min(1, -(ax * dx + ay * dy) / lengthSquared));
+    const x = ax + interpolation * dx;
+    const y = ay + interpolation * dy;
+    if (x * x + y * y <= corridorMeters * corridorMeters) return true;
+  }
+  return false;
+}
+
+function toFeature(record: CameraRecord) {
+  return {
+    type: "Feature" as const,
+    geometry: { type: "Point" as const, coordinates: [record.lon, record.lat] },
+    properties: { ...record.tags, id: record.id }
+  };
+}
+
 async function loadTile(index: TileIndex, key: string) {
   const url = index.tile_url.replace("{lat}/{lon}", key);
   const cached = tileCache.get(url);
@@ -99,11 +149,7 @@ export async function GET(request: NextRequest) {
       Number.isFinite(lon) && Number.isFinite(lat) &&
       lon >= bounds.west && lon <= bounds.east && lat >= bounds.south && lat <= bounds.north
     );
-    const features = visible.map((record) => ({
-      type: "Feature" as const,
-      geometry: { type: "Point" as const, coordinates: [record.lon, record.lat] },
-      properties: { ...record.tags, id: record.id }
-    }));
+    const features = visible.map(toFeature);
 
     return NextResponse.json({ type: "FeatureCollection", features, total: records.length }, {
       headers: { "Cache-Control": "public, s-maxage=300, stale-while-revalidate=900" }
@@ -111,6 +157,41 @@ export async function GET(request: NextRequest) {
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Camera feed failed" },
+      { status: 502 }
+    );
+  }
+}
+
+export async function POST(request: NextRequest) {
+  try {
+    const body = await request.json() as { route?: unknown; corridorMeters?: unknown };
+    if (!Array.isArray(body.route)) return NextResponse.json({ error: "A route is required" }, { status: 400 });
+    const route = body.route
+      .filter((coordinate): coordinate is number[] => Array.isArray(coordinate) && coordinate.length >= 2)
+      .map(([lon, lat]) => [Number(lon), Number(lat)])
+      .filter(([lon, lat]) => Number.isFinite(lon) && Number.isFinite(lat));
+    if (route.length < 2 || route.length > 400) {
+      return NextResponse.json({ error: "Route must contain between 2 and 400 coordinates" }, { status: 400 });
+    }
+    const corridorMeters = Math.max(500, Math.min(8_000, Number(body.corridorMeters) || 4_000));
+    const index = await loadIndex();
+    const keys = routeTileKeys(route, index.tile_size_degrees, new Set(index.regions));
+    const records = (await Promise.all(keys.map((key) => loadTile(index, key)))).flat();
+    const paddingDegrees = corridorMeters / 90_000;
+    const bounds = routeBounds(route, paddingDegrees);
+    const corridorRecords = records.filter((record) =>
+      record.lon >= bounds.west && record.lon <= bounds.east &&
+      record.lat >= bounds.south && record.lat <= bounds.north &&
+      isNearRoute(record, route, corridorMeters)
+    );
+    return NextResponse.json({
+      type: "FeatureCollection",
+      features: corridorRecords.map(toFeature),
+      total: records.length
+    }, { headers: { "Cache-Control": "no-store" } });
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Camera corridor failed" },
       { status: 502 }
     );
   }

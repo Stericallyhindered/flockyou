@@ -109,15 +109,13 @@ function directionsError(result: DirectionsResponse) {
   return result.error || `OpenRouteService request failed (${result.status}).`;
 }
 
-function routeBounds(route: LineString, padding = 0.025) {
-  const longitudes = route.coordinates.map(([lon]) => lon);
-  const latitudes = route.coordinates.map(([, lat]) => lat);
-  return [
-    Math.min(...longitudes) - padding,
-    Math.min(...latitudes) - padding,
-    Math.max(...longitudes) + padding,
-    Math.max(...latitudes) + padding
-  ] as [number, number, number, number];
+function sampledRouteCoordinates(route: LineString, maximum = 300) {
+  const coordinates = route.coordinates;
+  const stride = Math.max(1, Math.ceil(coordinates.length / maximum));
+  const sampled = coordinates.filter((_, index) => index % stride === 0);
+  const last = coordinates[coordinates.length - 1];
+  if (last && sampled[sampled.length - 1] !== last) sampled.push(last);
+  return sampled;
 }
 
 function arrivalTimeLabel(seconds: number) {
@@ -885,7 +883,7 @@ export default function Home() {
       let deflockSucceeded = false;
       if (useAlternates && data.features?.[0]?.geometry) {
         setRouteStatus("Indexing every camera near the complete route...");
-        await loadCamerasForBounds(routeBounds(data.features[0].geometry), true);
+        await loadCamerasForRoute(data.features[0].geometry, true);
       }
       const requestedStandardRoute = data.features?.[0] ? routeFromFeature(data.features[0]) : null;
 
@@ -1150,12 +1148,7 @@ export default function Home() {
       : "Open the browser menu and choose Install app or Add to Home screen.");
   }
 
-  async function loadCamerasForBounds(bounds: [number, number, number, number], merge = false) {
-    setCameraLoadState("loading");
-    const bbox = bounds.map((coordinate) => coordinate.toFixed(6)).join(",");
-    const response = await fetch(`/api/cameras?bbox=${bbox}`);
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.error || `Could not load DeFlock data: ${response.status}`);
+  function applyCameraData(data: any, merge: boolean) {
     const features = data.type === "FeatureCollection" ? data.features : [];
     const normalized = features
       .map((feature: any, index: number) => normalizeCameraFeature(feature, index))
@@ -1171,11 +1164,32 @@ export default function Home() {
     return next;
   }
 
+  async function loadCamerasForBounds(bounds: [number, number, number, number], merge = false) {
+    setCameraLoadState("loading");
+    const bbox = bounds.map((coordinate) => coordinate.toFixed(6)).join(",");
+    const response = await fetch(`/api/cameras?bbox=${bbox}`);
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || `Could not load DeFlock data: ${response.status}`);
+    return applyCameraData(data, merge);
+  }
+
+  async function loadCamerasForRoute(route: LineString, merge = true) {
+    setCameraLoadState("loading");
+    const response = await fetch("/api/cameras", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ route: sampledRouteCoordinates(route), corridorMeters: 4_000 })
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || `Could not load route cameras: ${response.status}`);
+    return applyCameraData(data, merge);
+  }
+
   function scheduleVisibleCameraLoad() {
     if (cameraViewportTimerRef.current !== null) window.clearTimeout(cameraViewportTimerRef.current);
     cameraViewportTimerRef.current = window.setTimeout(() => {
       const map = mapRef.current;
-      if (!map || map.getZoom() < 6) return;
+      if (!map || map.getZoom() < 9) return;
       const visible = map.getBounds();
       const bounds: [number, number, number, number] = [visible.getWest(), visible.getSouth(), visible.getEast(), visible.getNorth()];
       const signature = bounds.map((coordinate) => coordinate.toFixed(2)).join(",");
@@ -1190,7 +1204,7 @@ export default function Home() {
 
   async function loadInitialCameras() {
     try {
-      if (!mapRef.current || mapRef.current.getZoom() < 6) {
+      if (!mapRef.current || mapRef.current.getZoom() < 9) {
         setCameraLoadState("ready");
         setRouteStatus("Allow GPS or move the map to load nearby cameras.");
         return;
