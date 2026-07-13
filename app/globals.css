@@ -35,8 +35,6 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--cyan); outl
 .app-shell { height: 100dvh; min-height: 640px; overflow: hidden; position: relative; }
 .map { background: #dce5e3; inset: 0; position: absolute; z-index: 0; }
 .map .leaflet-container { height: 100%; width: 100%; }
-.map .leaflet-map-pane { transform-origin: 50% 50%; transition: rotate 100ms linear, scale 180ms ease-out; }
-.map.heading-up .leaflet-map-pane { rotate: var(--map-bearing, 0deg); scale: 1.42; }
 
 .leaflet-control-zoom a,
 .leaflet-control-scale-line {
@@ -165,7 +163,6 @@ input:focus { border-color: var(--cyan); box-shadow: 0 0 0 1px rgba(56, 213, 238
 .perspective-glyph { border: 1px solid currentColor; border-radius: 50%; display: block; height: 22px; position: relative; transition: transform 180ms ease; width: 22px; }
 .perspective-glyph::before { border-bottom: 8px solid currentColor; border-left: 4px solid transparent; border-right: 4px solid transparent; content: ""; left: 6px; position: absolute; top: 2px; }
 .perspective-glyph::after { background: currentColor; content: ""; height: 7px; left: 10px; position: absolute; top: 10px; width: 1px; }
-.perspective-heading .perspective-glyph { transform: rotate(45deg); }
 .perspective-overview .perspective-glyph { border-radius: 2px; }
 .perspective-overview .perspective-glyph::before { border: 1px solid currentColor; bottom: 4px; left: 4px; right: 4px; top: 4px; }
 .perspective-overview .perspective-glyph::after { display: none; }
