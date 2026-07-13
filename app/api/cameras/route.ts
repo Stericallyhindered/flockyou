@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
+export const runtime = "edge";
 
 const DEFLOCK_INDEX_URL = "https://cdn.deflock.me/regions/index.json";
 
@@ -31,7 +32,13 @@ function parseBounds(value: string | null): Bounds | null {
 
 async function loadIndex() {
   if (indexCache && indexCache.expiration_utc * 1000 > Date.now()) return indexCache;
-  const response = await fetch(DEFLOCK_INDEX_URL, { next: { revalidate: 300 } });
+  const response = await fetch(DEFLOCK_INDEX_URL, {
+    cache: "no-store",
+    headers: {
+      Accept: "application/json",
+      "User-Agent": "Mozilla/5.0 (compatible; FLOCKYOU/1.0; +https://github.com/Stericallyhindered/flockyou)"
+    }
+  });
   if (!response.ok) throw new Error(`DeFlock tile index returned ${response.status}`);
   const data = await response.json() as TileIndex;
   if (!Array.isArray(data.regions) || !data.tile_url || !Number.isFinite(data.tile_size_degrees)) {
@@ -60,7 +67,13 @@ async function loadTile(index: TileIndex, key: string) {
   const url = index.tile_url.replace("{lat}/{lon}", key);
   const cached = tileCache.get(url);
   if (cached && cached.expiresAt > Date.now()) return cached.records;
-  const response = await fetch(url, { next: { revalidate: 300 } });
+  const response = await fetch(url, {
+    cache: "no-store",
+    headers: {
+      Accept: "application/json",
+      "User-Agent": "Mozilla/5.0 (compatible; FLOCKYOU/1.0; +https://github.com/Stericallyhindered/flockyou)"
+    }
+  });
   if (!response.ok) throw new Error(`DeFlock camera tile returned ${response.status}`);
   const records = await response.json() as CameraRecord[];
   if (!Array.isArray(records)) throw new Error("DeFlock camera tile is invalid");
