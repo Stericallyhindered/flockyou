@@ -35,7 +35,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--cyan); outl
 .app-shell { height: 100dvh; min-height: 640px; overflow: hidden; position: relative; }
 .map { background: #dce5e3; inset: 0; position: absolute; z-index: 0; }
 .map .leaflet-container { height: 100%; width: 100%; }
-.map .leaflet-map-pane { transition: rotate 320ms ease-out, scale 320ms ease-out; }
+.map .leaflet-map-pane { transform-origin: 50% 50%; transition: rotate 100ms linear, scale 180ms ease-out; }
 .map.heading-up .leaflet-map-pane { rotate: var(--map-bearing, 0deg); scale: 1.42; }
 
 .leaflet-control-zoom a,

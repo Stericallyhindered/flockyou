@@ -287,6 +287,8 @@ export default function Home() {
   const [distanceToTurn, setDistanceToTurn] = useState<number | null>(null);
   const [deflockActive, setDeflockActive] = useState(false);
   const [heading, setHeading] = useState(0);
+  const [deviceHeading, setDeviceHeading] = useState<number | null>(null);
+  const [compassEnabled, setCompassEnabled] = useState(false);
   const [perspective, setPerspective] = useState<"north" | "heading" | "overview">("north");
   const [voiceMode, setVoiceMode] = useState<"full" | "alerts" | "muted">("full");
   const [hudMode, setHudMode] = useState<"full" | "compact" | "hidden">("full");
@@ -298,6 +300,7 @@ export default function Home() {
   const [routeHistory, setRouteHistory] = useState<RouteHistoryEntry[]>([]);
   const [avoidedCameraCount, setAvoidedCameraCount] = useState(0);
   const [fallbackRoute, setFallbackRoute] = useState<RouteState | null>(null);
+  const mapHeading = perspective === "heading" && deviceHeading !== null ? deviceHeading : heading;
 
   const routeExposures = useMemo(
     () => route ? findCameraExposures(cameras, route.geometry) : [],
@@ -394,7 +397,13 @@ export default function Home() {
       wheelPxPerZoomLevel: 90,
       inertia: true,
       inertiaDeceleration: 2600,
-      easeLinearity: 0.2
+      easeLinearity: 0.2,
+      minZoom: 2,
+      maxZoom: 20,
+      maxBounds: [[-85, -180], [85, 180]],
+      maxBoundsViscosity: 0.85,
+      worldCopyJump: true,
+      bounceAtZoomLimits: true
     }).setView([defaultCenter[1], defaultCenter[0]], 2);
     mapContainer = map.getContainer();
     mapContainer.addEventListener("pointerdown", suspendFollow, { passive: true });
@@ -552,6 +561,39 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    if (typeof DeviceOrientationEvent === "undefined") return;
+    const orientation = DeviceOrientationEvent as typeof DeviceOrientationEvent & { requestPermission?: () => Promise<string> };
+    if (!orientation.requestPermission) setCompassEnabled(true);
+  }, []);
+
+  useEffect(() => {
+    if (!compassEnabled) return;
+    let lastUpdate = 0;
+    const updateCompass = (event: DeviceOrientationEvent) => {
+      const now = performance.now();
+      if (now - lastUpdate < 80) return;
+      const iosHeading = Number((event as DeviceOrientationEvent & { webkitCompassHeading?: number }).webkitCompassHeading);
+      const alpha = Number(event.alpha);
+      let next = Number.isFinite(iosHeading) ? iosHeading : Number.isFinite(alpha) ? 360 - alpha : Number.NaN;
+      if (!Number.isFinite(next)) return;
+      if (!Number.isFinite(iosHeading)) next += window.screen.orientation?.angle ?? 0;
+      next = (next + 360) % 360;
+      lastUpdate = now;
+      setDeviceHeading((current) => {
+        if (current === null) return next;
+        const delta = ((next - current + 540) % 360) - 180;
+        return (current + delta * 0.28 + 360) % 360;
+      });
+    };
+    window.addEventListener("deviceorientationabsolute", updateCompass as EventListener, true);
+    window.addEventListener("deviceorientation", updateCompass, true);
+    return () => {
+      window.removeEventListener("deviceorientationabsolute", updateCompass as EventListener, true);
+      window.removeEventListener("deviceorientation", updateCompass, true);
+    };
+  }, [compassEnabled]);
+
+  useEffect(() => {
     const map = mapRef.current;
     const L = leafletRef.current;
     if (!L || !map || !position) return;
@@ -572,7 +614,7 @@ export default function Home() {
             : speed > 6 ? 16.75
               : 17.25;
       const lookAheadMeters = navigationActive ? Math.max(30, Math.min(130, speed * 5)) : 0;
-      const center = lookAheadMeters > 0 ? pointAhead(position, heading, lookAheadMeters) : position;
+      const center = lookAheadMeters > 0 ? pointAhead(position, mapHeading, lookAheadMeters) : position;
       const target = L.latLng(center[1], center[0]);
       const centerDistance = map.distance(map.getCenter(), target);
       const zoomDifference = Math.abs(map.getZoom() - targetZoom);
@@ -582,17 +624,22 @@ export default function Home() {
         map.panTo(target, { animate: true, duration: 0.55, easeLinearity: 0.2 });
       }
     }
-  }, [position, trackedPosition, heading, followGps, route, navigationActive, perspective]);
+  }, [position, trackedPosition, mapHeading, followGps, route, navigationActive, perspective]);
 
   useEffect(() => {
     if (!mapNode.current) return;
     mapNode.current.classList.toggle("heading-up", perspective === "heading");
-    mapNode.current.style.setProperty("--map-bearing", `${-heading}deg`);
+    mapNode.current.style.setProperty("--map-bearing", `${-mapHeading}deg`);
+    if (perspective !== "heading" && mapRef.current) {
+      const map = mapRef.current;
+      map.stop();
+      window.requestAnimationFrame(() => map.invalidateSize({ animate: false, pan: false }));
+    }
     if (perspective === "overview" && route && leafletRef.current) {
       const bounds = leafletRef.current.latLngBounds(route.geometry.coordinates.map(([lon, lat]) => [lat, lon] as Leaflet.LatLngTuple));
       mapRef.current?.fitBounds(bounds, { padding: [110, 110] });
     }
-  }, [perspective, heading, route]);
+  }, [perspective, mapHeading, route]);
 
   useEffect(() => {
     if (!navigationActive || !trackedPosition || !route?.geometry.coordinates.length) return;
@@ -1086,12 +1133,23 @@ export default function Home() {
     if (!next) window.speechSynthesis?.cancel();
   }
 
-  function cyclePerspective() {
-    setPerspective((current) => {
-      const next = current === "north" ? "heading" : current === "heading" ? "overview" : "north";
-      setFollowGps(next !== "overview");
-      return next;
-    });
+  async function cyclePerspective() {
+    const next = perspective === "north" ? "heading" : perspective === "heading" ? "overview" : "north";
+    if (next === "heading" && typeof DeviceOrientationEvent !== "undefined") {
+      const orientation = DeviceOrientationEvent as typeof DeviceOrientationEvent & { requestPermission?: () => Promise<string> };
+      if (orientation.requestPermission) {
+        try {
+          const permission = await orientation.requestPermission();
+          setCompassEnabled(permission === "granted");
+          if (permission !== "granted") setRouteStatus("Compass permission denied. Heading Up will use GPS course while moving.");
+        } catch {
+          setRouteStatus("Compass unavailable. Heading Up will use GPS course while moving.");
+        }
+      } else {
+        setCompassEnabled(true);
+      }
+    }
+    setPerspective(next);
   }
 
   function locateUser() {
