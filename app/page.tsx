@@ -129,6 +129,17 @@ function directionsError(result: DirectionsResponse) {
   return result.error || `OpenRouteService request failed (${result.status}).`;
 }
 
+function routeBounds(route: LineString, padding = 0.025) {
+  const longitudes = route.coordinates.map(([lon]) => lon);
+  const latitudes = route.coordinates.map(([, lat]) => lat);
+  return [
+    Math.min(...longitudes) - padding,
+    Math.min(...latitudes) - padding,
+    Math.max(...longitudes) + padding,
+    Math.max(...latitudes) + padding
+  ] as [number, number, number, number];
+}
+
 function arrivalTimeLabel(seconds: number) {
   return new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" })
     .format(new Date(Date.now() + Math.max(0, seconds) * 1000));
@@ -286,10 +297,12 @@ export default function Home() {
   const [alternates, setAlternates] = useState<RouteState[]>([]);
   const [routeStatus, setRouteStatus] = useState("Enter a To address, then plan a route.");
   const [cameras, setCameras] = useState<CameraPoint[]>(demoCameras);
-  const [cameraDataReady, setCameraDataReady] = useState(false);
+  const [cameraLoadState, setCameraLoadState] = useState<"loading" | "ready" | "error">("loading");
+  const [cameraDatasetTotal, setCameraDatasetTotal] = useState(0);
   const [orsKey, setOrsKey] = useState(process.env.NEXT_PUBLIC_OPENROUTESERVICE_API_KEY ?? "");
   const [deflockUrl, setDeflockUrl] = useState(process.env.NEXT_PUBLIC_DEFLOCK_POINTS_URL ?? defaultDeflockUrl);
   const [panel, setPanel] = useState<"route" | "cameras" | "settings">("route");
+  const [panelExpanded, setPanelExpanded] = useState(false);
   const [mapTheme, setMapTheme] = useState<"night" | "day">("day");
   const [cameraScope, setCameraScope] = useState<"route" | "visible">("visible");
   const [navigationActive, setNavigationActive] = useState(false);
@@ -299,6 +312,7 @@ export default function Home() {
   const [heading, setHeading] = useState(0);
   const [perspective, setPerspective] = useState<"north" | "heading" | "overview">("north");
   const [voiceMode, setVoiceMode] = useState<"full" | "alerts" | "muted">("full");
+  const [hudMode, setHudMode] = useState<"full" | "compact" | "hidden">("full");
   const [lowDataMode, setLowDataMode] = useState(false);
   const [cameraReports, setCameraReports] = useState<CameraReport[]>([]);
   const [reportCamera, setReportCamera] = useState<CameraPoint | null>(null);
@@ -478,7 +492,15 @@ export default function Home() {
       setRouteStatus("Local history could not be restored.");
     }
     const readyTimer = window.setTimeout(() => { persistenceReadyRef.current = true; }, 0);
-    if ("serviceWorker" in navigator) void navigator.serviceWorker.register("/sw.js");
+    if ("serviceWorker" in navigator) {
+      if (process.env.NODE_ENV === "production") {
+        void navigator.serviceWorker.register("/sw.js");
+      } else {
+        void navigator.serviceWorker.getRegistrations().then((registrations) => {
+          registrations.forEach((registration) => void registration.unregister());
+        });
+      }
+    }
     return () => window.clearTimeout(readyTimer);
   }, []);
 
@@ -693,6 +715,7 @@ export default function Home() {
     setSearchResults([]);
     setSearchStatus("");
     setPanel("route");
+    setPanelExpanded(true);
     setRouteStatus(`Choose where to start, then route to ${place.label}.`);
     if (!searchMarkerRef.current && mapRef.current) {
       searchMarkerRef.current = L.circleMarker([place.point[1], place.point[0]], { radius: 9, color: "#fff", weight: 3, fillColor: "#111827", fillOpacity: 1 }).addTo(mapRef.current);
@@ -714,6 +737,7 @@ export default function Home() {
     if (!selectedPlace) return;
     setDestination(selectedPlace.label);
     setPanel("route");
+    setPanelExpanded(true);
     setRouteStatus(`Ready to route to ${selectedPlace.label}.`);
   }
 
@@ -760,11 +784,6 @@ export default function Home() {
       setRouteStatus("Enter a To address.");
       return;
     }
-    if (useAlternates && !cameraDataReady) {
-      setRouteStatus("The complete camera dataset is still loading. Try DeFlock again in a moment.");
-      return;
-    }
-
     routingInFlightRef.current = true;
     try {
       setRouteStatus("Finding From and To...");
@@ -824,6 +843,10 @@ export default function Home() {
       if (!response.ok) throw new Error(directionsError(response));
       let data = response.data;
       let deflockSucceeded = false;
+      if (useAlternates && data.features?.[0]?.geometry) {
+        setRouteStatus("Indexing every camera near the complete route...");
+        await loadCamerasForBounds(routeBounds(data.features[0].geometry), true);
+      }
       const requestedStandardRoute = data.features?.[0] ? routeFromFeature(data.features[0]) : null;
 
       if (useAlternates) {
@@ -960,10 +983,12 @@ export default function Home() {
       setRouteStatus(useAlternates
         ? deflockSucceeded ? "DeFlocked route ready." : "No legal camera-free bypass was found. Showing the standard route."
         : "Route ready.");
+      setPanelExpanded(false);
 
       const bounds = L.latLngBounds(routes[0].geometry.coordinates.map(([lon, lat]) => [lat, lon] as Leaflet.LatLngTuple));
       mapRef.current?.fitBounds(bounds, { padding: [110, 110] });
     } catch (error) {
+      if (useAlternates) setCameraLoadState("error");
       setRouteStatus(error instanceof Error ? error.message : "Route failed.");
     } finally {
       routingInFlightRef.current = false;
@@ -1048,6 +1073,7 @@ export default function Home() {
       finishNavigationSession();
     }
     setNavigationActive(next);
+    if (next) setPanelExpanded(false);
     setFollowGps(next || followGps);
     spokenStepRef.current = -1;
     if (!next) window.speechSynthesis?.cancel();
@@ -1061,27 +1087,44 @@ export default function Home() {
     });
   }
 
-  async function loadDeflockPoints() {
+  async function loadCamerasForBounds(bounds: [number, number, number, number], merge = false) {
     if (!deflockUrl.trim()) {
       setCameras(demoCameras);
-      return;
+      return demoCameras;
     }
 
+    setCameraLoadState("loading");
+    const bbox = bounds.map((coordinate) => coordinate.toFixed(6)).join(",");
+    const response = await fetch(`/api/cameras?url=${encodeURIComponent(deflockUrl.trim())}&bbox=${bbox}`);
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || `Could not load DeFlock data: ${response.status}`);
+    const features = data.type === "FeatureCollection" ? data.features : [];
+    const normalized = features
+      .map((feature: any, index: number) => normalizeCameraFeature(feature, index))
+      .filter(Boolean) as CameraPoint[];
+    const existing = merge ? camerasRef.current.filter((camera) => camera.source !== "Demo data") : [];
+    const byId = new Map(existing.map((camera) => [camera.id, camera]));
+    normalized.forEach((camera) => byId.set(camera.id, camera));
+    const next = [...byId.values()];
+    camerasRef.current = next;
+    setCameras(next);
+    setCameraDatasetTotal(Number(data.total) || next.length);
+    setCameraLoadState("ready");
+    return next;
+  }
+
+  async function loadDeflockPoints() {
     try {
-      setRouteStatus("Loading DeFlock camera points...");
-      const response = await fetch(`/api/cameras?url=${encodeURIComponent(deflockUrl.trim())}`);
-      if (!response.ok) throw new Error(`Could not load DeFlock data: ${response.status}`);
-      const data = await response.json();
-      const features = data.type === "FeatureCollection" ? data.features : [];
-      const normalized = features
-        .map((feature: any, index: number) => normalizeCameraFeature(feature, index))
-        .filter(Boolean) as CameraPoint[];
-      setCameras(normalized.length ? normalized : demoCameras);
-      setCameraDataReady(normalized.length > 2);
-      setRouteStatus(`Loaded ${normalized.length.toLocaleString()} camera points.`);
+      setRouteStatus("Indexing cameras near the current map...");
+      const mapBounds = mapRef.current?.getBounds();
+      const bounds: [number, number, number, number] = mapBounds
+        ? [mapBounds.getWest() - 0.08, mapBounds.getSouth() - 0.08, mapBounds.getEast() + 0.08, mapBounds.getNorth() + 0.08]
+        : [defaultCenter[0] - 0.35, defaultCenter[1] - 0.35, defaultCenter[0] + 0.35, defaultCenter[1] + 0.35];
+      const loaded = await loadCamerasForBounds(bounds);
+      setRouteStatus(`Camera index ready: ${loaded.length.toLocaleString()} nearby points.`);
     } catch (error) {
-      setCameraDataReady(false);
-      setRouteStatus(error instanceof Error ? error.message : "Camera data failed to load.");
+      setCameraLoadState("error");
+      setRouteStatus(error instanceof Error ? error.message : "Camera data failed to load. Tap retry.");
     }
   }
 
@@ -1095,7 +1138,7 @@ export default function Home() {
     <main className="app-shell">
       <div ref={mapNode} className="map" aria-label="Interactive navigation map" />
 
-      <section className="topbar" aria-label="Map search">
+      <section className={`topbar ${navigationActive ? "navigation-mode" : ""}`} aria-label="Map search">
         <div className="brand">
           <h1>FLOCKYOU</h1>
           <p className="eyebrow">An open source to freedom</p>
@@ -1121,6 +1164,11 @@ export default function Home() {
         <button className={followGps ? "icon-button active" : "icon-button"} onClick={() => setFollowGps((value) => !value)} aria-label="Toggle GPS follow">
           GPS
         </button>
+        {navigationActive && (
+          <button className="overlay-toggle" onClick={() => setHudMode((mode) => mode === "hidden" ? "full" : "hidden")}>
+            HUD
+          </button>
+        )}
       </section>
 
       {searchResults.length > 0 && (
@@ -1135,8 +1183,8 @@ export default function Home() {
 
       {searchStatus && searchResults.length === 0 && <div className="search-result">{searchStatus}</div>}
 
-      {navigationActive && route && (
-        <section className="navigation-banner" aria-live="polite">
+      {navigationActive && route && hudMode !== "hidden" && (
+        <section className={`navigation-banner ${hudMode}`} aria-live="polite">
           <div className="maneuver-symbol" aria-hidden="true">
             {safeManeuverSymbol(route.steps[activeStepIndex]?.instruction)}
           </div>
@@ -1144,6 +1192,11 @@ export default function Home() {
             <span>{distanceToTurn === null ? "Following route" : metersToLabel(distanceToTurn)}</span>
             <strong>{route.steps[activeStepIndex]?.instruction ?? "Continue to destination"}</strong>
             <small>Then: {route.steps[activeStepIndex + 1]?.instruction ?? "Arrive at destination"}</small>
+            <span className={nextCameraThreat ? "hud-camera threat" : "hud-camera clear"}>
+              {nextCameraThreat
+                ? `CAMERA ${metersToLabel(Math.max(0, nextCameraThreat.routeLocation - (trackedPosition?.routeProgress ?? 0)))}`
+                : "CAMERA CLEAR"}
+            </span>
           </div>
           <div className="navigation-metrics">
             <div><span>ETA</span><strong>{arrivalTimeLabel(route.duration * ((trackedPosition?.remainingDistance ?? route.distance) / Math.max(1, route.distance)))}</strong></div>
@@ -1151,28 +1204,26 @@ export default function Home() {
             <div><span>SPEED</span><strong>{Math.round((trackedPosition?.speed ?? 0) * 2.23694)} mph</strong></div>
             <div><span>GPS</span><strong>{trackedPosition?.snapped ? "LOCKED" : "RAW"}</strong></div>
           </div>
-          <button className="end-navigation" onClick={toggleNavigation}>End</button>
-        </section>
-      )}
-
-      {navigationActive && route && (
-        <section className={`threat-radar ${nextCameraThreat ? "threat" : "clear"}`} aria-live="polite">
-          <div className="radar-sweep" aria-hidden="true"><i /></div>
-          <div>
-            <span>CAMERA RADAR</span>
-            <strong>{nextCameraThreat ? metersToLabel(Math.max(0, nextCameraThreat.routeLocation - (trackedPosition?.routeProgress ?? 0))) : "ROUTE CLEAR"}</strong>
-            <small>{nextCameraThreat
-              ? `${nextCameraThreat.camera.name} / ${nextCameraThreat.camera.directionKnown ? `facing ${Math.round(nextCameraThreat.camera.bearing)} deg` : "direction unknown"} / ${cameraFreshness(nextCameraThreat.camera).label}`
-              : "No camera view intersects the route ahead"}</small>
+          <div className="nav-actions">
+            <button className="hud-size" onClick={() => setHudMode((mode) => mode === "compact" ? "full" : "compact")} title={hudMode === "compact" ? "Expand navigation HUD" : "Compact navigation HUD"}>
+              {hudMode === "compact" ? "+" : "-"}
+            </button>
+            <button className="hud-hide" onClick={() => setHudMode("hidden")} title="Hide navigation HUD">x</button>
+            <button className="end-navigation" onClick={toggleNavigation}>End</button>
           </div>
         </section>
       )}
 
-      <aside className="panel">
+      <aside className={`panel ${panelExpanded ? "expanded" : "collapsed"}`}>
+        <button className="panel-toggle" onClick={() => setPanelExpanded((expanded) => !expanded)} aria-expanded={panelExpanded}>
+          <i aria-hidden="true" />
+          <strong>{panelExpanded ? "Hide controls" : route ? `${metersToLabel(route.distance)} / ${secondsToLabel(route.duration)}` : "Route controls"}</strong>
+          <span>{panelExpanded ? "v" : "^"}</span>
+        </button>
         <nav className="tabs" aria-label="Navigation panels">
-          <button className={panel === "route" ? "active" : ""} onClick={() => setPanel("route")}>Route</button>
-          <button className={panel === "cameras" ? "active" : ""} onClick={() => setPanel("cameras")}>Cameras</button>
-          <button className={panel === "settings" ? "active" : ""} onClick={() => setPanel("settings")}>System</button>
+          <button className={panel === "route" ? "active" : ""} onClick={() => { setPanel("route"); setPanelExpanded(true); }}>Route</button>
+          <button className={panel === "cameras" ? "active" : ""} onClick={() => { setPanel("cameras"); setPanelExpanded(true); }}>Cameras</button>
+          <button className={panel === "settings" ? "active" : ""} onClick={() => { setPanel("settings"); setPanelExpanded(true); }}>System</button>
         </nav>
 
         {panel === "route" && (
@@ -1207,8 +1258,8 @@ export default function Home() {
               )}
               <button type="submit">Plan route</button>
             </form>
-            <button className="deflock-check" disabled={!cameraDataReady} onClick={(event) => planRoute(event as any, true)}>
-              {cameraDataReady ? "DeFlock my route" : "Loading camera data..."}
+            <button className="deflock-check" onClick={(event) => planRoute(event as any, true)}>
+              {cameraLoadState === "error" ? "Retry and DeFlock my route" : "DeFlock my route"}
             </button>
             <p className="route-status" aria-live="polite">{routeStatus}</p>
 
@@ -1221,7 +1272,7 @@ export default function Home() {
               <div>
                 <span>Map</span>
                 <strong>{mapStatus}</strong>
-                <small>{cameras.length.toLocaleString()} cameras loaded</small>
+                <small>{cameras.length.toLocaleString()} nearby / {cameraDatasetTotal.toLocaleString()} indexed</small>
               </div>
             </div>
 
